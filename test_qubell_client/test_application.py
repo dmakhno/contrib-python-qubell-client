@@ -58,7 +58,7 @@ class ApplicationClassTest(BaseTestCase):
         self.assertTrue(my_app in self.org.applications)
 
         # check we cannot create already created application
-        new_app = self.org.get_application(id=my_app.id).create(name='sdf', manifest=self.manifest)
+        new_app = self.org.get_application(id=my_app.id).create_legacy(name='sdf', manifest=self.manifest)
         self.assertEqual(my_app, new_app)
 
         self.assertTrue(my_app.delete())

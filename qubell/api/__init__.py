@@ -12,8 +12,14 @@
 # implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from qubell.api.provider.router import Router
 
 __author__ = "Vasyl Khomenko"
 __copyright__ = "Copyright 2013, Qubell.com"
 __license__ = "Apache"
 __email__ = "vkhomenko@qubell.com"
+
+ROUTER = Router("some_tenant")
+def set_global_router(router):
+    global ROUTER
+    ROUTER = router

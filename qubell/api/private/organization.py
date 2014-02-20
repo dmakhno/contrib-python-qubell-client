@@ -12,67 +12,115 @@
 # implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-__author__ = "Vasyl Khomenko"
-__copyright__ = "Copyright 2013, Qubell.com"
-__license__ = "Apache"
-__email__ = "vkhomenko@qubell.com"
-
 import logging as log
 
 import requests
 import simplejson as json
 
+from qubell.api.private.common import EntityList, Entity, fetched
 from qubell.api.private.manifest import Manifest
 from qubell.api.private.instance import Instance
 from qubell.api.private import exceptions
 from qubell.api.private.instance import Instances
-from qubell.api.private.application import Applications
+from qubell.api.private.application import Application, Applications
 from qubell.api.private.environment import Environments
 from qubell.api.private.zone import Zones
 
 
-class Organization(object):
+__author__ = "Vasyl Khomenko"
+__copyright__ = "Copyright 2013, Qubell.com"
+__license__ = "Apache"
+__email__ = "vkhomenko@qubell.com"
 
-    def __init__(self, auth, id):
+
+class OrganizationList(EntityList):
+    def __init__(self, raw_json, router=None):
+        self.raw_json = raw_json
+        self.router = router
+        EntityList.__init__(self)
+
+    def _generate_object_list(self):
+        self.object_list = [Organization(item["id"], name=item["name"], router=self.router, auto_fetch=False) for item
+                            in self.raw_json]
+
+
+class Organization(Entity):
+    def __init__(self, id, name=None, router=None, auto_fetch=True):
+        self.router = router
+        self.organizationId = self.id = id
+        self.name = name
+        Entity.__init__(self, auto_fetch)
+
+    @staticmethod
+    def create(name, router):
+        assert name
+        log.info("Creating organization: %s" % name)
+        payload = json.dumps({'editable': 'true',
+                              'name': name})
+        resp = router.post_organization(data=payload)
+        return Organization(resp.json()['id'], name=name, router=router)
+
+    def fetch(self):
+        resp = self.router.get_organization(org_id=self.id)
+        self.raw_json = resp.json()
+
         self.services = []
         self.providers = []
-        self.zones = []
 
-        self.organizationId = id
-        self.auth = auth
+        self.name = self.raw_json['name']
+        Entity.fetch(self)
 
-        my = self.json()
-        self.name = my['name']
-        self.zones = Zones(self)
-        self.environments = Environments(self)
-        self.applications = Applications(self)
-        self.instances = Instances(self)
+    @property
+    def zones(self):
+        return Zones(self)
 
-        self.zone = self.get_default_zone()
-        self.defaultEnvironment = self.get_default_environment()
+    @property
+    def environments(self):
+        return Environments(self)
 
+    @property
+    def applications(self):
+        return Applications(self)
 
+    @property
+    def instances(self):
+        return Instances(self)
+
+    @property
+    def zone(self):
+        return self.get_default_zone()
+
+    @property
+    def defaultEnvironment(self):
+        return self.get_default_environment()
+
+    #@property
+    @fetched
     def json(self):
-        url = self.auth.api+'/organizations.json'
-        resp = requests.get(url, cookies=self.auth.cookies, verify=False)
-        log.debug(resp.text)
-        if resp.status_code == 200:
-            org = [x for x in resp.json() if x['id'] == self.organizationId]
-            if len(org)>0:
-                return org[0]
-            return resp.json()
-        raise exceptions.ApiError('Unable to get organization by id %s, got error: %s' % (self.organizationId, resp.text))
+        return self.raw_json
+
+    # todo: seems very intelectual logic
+    # url = self.auth.api+'/organizations.json'
+    # resp = requests.get(url, cookies=self.auth.cookies, verify=False)
+    # log.debug(resp.text)
+    # if resp.status_code == 200:
+    #     org = [x for x in resp.json() if x['id'] == self.organizationId]
+    #     if len(org)>0:
+    #         return org[0]
+    #     return resp.json()
+    # raise exceptions.ApiError('Unable to get organization by id %s, got error: %s' % (self.organizationId, resp.text))
 
     def restore(self, config):
         for instance in config.pop('instances', []):
             launched = self.get_or_launch_instance(id=instance.pop('id', None), name=instance.pop('name'), **instance)
             assert launched.ready()
-        for serv in config.pop('services',[]):
+        for serv in config.pop('services', []):
             self.get_or_create_service(id=serv.pop('id', None), name=serv.pop('name'), type=serv.pop('type', None))
         for prov in config.get('providers', []):
             self.get_or_create_provider(id=prov.pop('id', None), name=prov.pop('name'), parameters=prov)
-        for env in config.pop('environments',[]):
-            restored_env = self.get_or_create_environment(id=env.pop('id', None), name=env.pop('name', 'default'),zone=env.pop('zone', None), default=env.pop('default', False))
+        for env in config.pop('environments', []):
+            restored_env = self.get_or_create_environment(id=env.pop('id', None), name=env.pop('name', 'default'),
+                                                          zone=env.pop('zone', None), default=env.pop('default', False))
             restored_env.clean()
             restored_env.restore(env)
         for app in config.pop('applications'):
@@ -80,40 +128,30 @@ class Organization(object):
             restored_app = self.application(id=app.pop('id', None), manifest=Manifest(**mnf), name=app.pop('name'))
             restored_app.restore(app)
 
-### APPLICATION
-    def create_application(self, name=None, manifest=None):
+        ### APPLICATION
+
+    def create_application(self, name, manifest):
         """ Creates application and returns Application object.
         """
-        if not manifest:
-            raise exceptions.NotEnoughParams('Manifest not set')
-        if not name:
-            name = 'auto-generated-name'
-        from qubell.api.private.application import Application
-        app = Application(auth=self.auth, organization=self).create(name=name, manifest=manifest)
-        self.applications.add(app)
-        return app
+        return Application.create(name, manifest, self, self.router)
+
+        # if not manifest:
+        #     raise exceptions.NotEnoughParams('Manifest not set')
+        # if not name:
+        #     name = 'auto-generated-name' #todo: why for app?
+        # app = Application(auth=self.auth, organization=self).create_legacy(name=name, manifest=manifest)
+        # self.applications.add(app)
+        # return app
 
     def get_application(self, id=None, name=None):
         """ Get application object by name or id.
         """
-        if id:
-            apps = [x for x in self.applications if x.id == id]
-        elif name:
-            apps = [x for x in self.applications if x.name == name]
-        else:
-            raise exceptions.NotEnoughParams('No name nor id given. Unable to get application')
-
-        if len(apps) == 1:
-            return apps[0]
-        elif len(apps) > 1:
-            log.warning('Found several applications with name %s. Picking last' % name)
-            return apps[-1]
-        raise exceptions.NotFoundError('Unable to get application by id: %s' % id)
+        return self.applications[id or name]
 
     def list_applications_json(self):
         """ Return raw json
         """
-        url = self.auth.api+'/organizations/'+self.organizationId+'/applications.json'
+        url = self.auth.api + '/organizations/' + self.organizationId + '/applications.json'
         resp = requests.get(url, cookies=self.auth.cookies, data="{}", verify=False)
         log.debug(resp.text)
         if resp.status_code == 200:
@@ -178,16 +216,20 @@ class Organization(object):
         return found or created
 
 
-# INSTANCE
+    # INSTANCE
 
     def create_instance(self, application, revision=None, environment=None, name=None, parameters={}):
         """ Launches instance in application and returns Instance object.
         """
-        if not application:
-            raise exceptions.NotEnoughParams('Application not set')
+        #if not application:
+        #    raise exceptions.NotEnoughParams('Application not set')
+
+
+        #instance = Instance(auth=self.auth, application=application).create(revision=revision, environment=environment,
+        #                                                                    name=name, parameters=parameters)
         from qubell.api.private.instance import Instance
-        instance = Instance(auth=self.auth, application=application).create(revision=revision, environment=environment, name=name, parameters=parameters)
-        self.instances.add(instance)
+        instance = Instance.create(revision=revision, environment=environment, application=application, name=name, parameters=parameters, router=self.router)
+        self._instances_cache.add(instance)
         return instance
 
     def get_instance(self, application=None, id=None, name=None):
@@ -218,7 +260,7 @@ class Organization(object):
         """ Get list of instances in json format converted to list
         """
         if application: # Return list of instances in application
-            url = self.auth.api+'/organizations/'+self.organizationId+'/applications/'+application.applicationId+'.json'
+            url = self.auth.api + '/organizations/' + self.organizationId + '/applications/' + application.applicationId + '.json'
             resp = requests.get(url, cookies=self.auth.cookies, data="{}", verify=False)
             log.debug(resp.text)
             if resp.status_code == 200:
@@ -254,7 +296,7 @@ class Organization(object):
             return self.create_instance(application=application, **kwargs)
         raise exceptions.NotEnoughParams('Not enough parameters')
 
-    def instance(self, application=None, id=None, name=None, revision=None, environment=None,  parameters={}):
+    def instance(self, application=None, id=None, name=None, revision=None, environment=None, parameters={}):
         """ Smart method. It does everything, to return Instance with given parameters within the application.
         If instance found running and given parameters are actual: return it.
         If instance found, but parameters differs - reconfigure instance with new parameters.
@@ -298,12 +340,13 @@ class Organization(object):
             found.reconfigure(revision=revision, environment=environment, name=name, parameters=parameters)
 
         if not found:
-            created = self.create_instance(application=application, revision=revision, environment=environment, name=name, parameters=parameters)
+            created = self.create_instance(application=application, revision=revision, environment=environment,
+                                           name=name, parameters=parameters)
 
         return found or created
 
 
-### SERVICE
+    ### SERVICE
     def create_service(self, name, type, parameters={}, zone=None):
         log.info("Creating service: %s" % name)
         if not zone:
@@ -313,7 +356,7 @@ class Organization(object):
                 'zoneId': zone,
                 'parameters': parameters}
 
-        url = self.auth.api+'/organizations/'+self.organizationId+'/services.json'
+        url = self.auth.api + '/organizations/' + self.organizationId + '/services.json'
         headers = {'Content-Type': 'application/json'}
         resp = requests.post(url, cookies=self.auth.cookies, data=json.dumps(data), verify=False, headers=headers)
         log.debug(resp.request.body)
@@ -337,12 +380,13 @@ class Organization(object):
     def get_service(self, id):
         log.info("Picking service: %s" % id)
         from qubell.api.private.service import Service
+
         serv = Service(self.auth, organization=self, id=id)
         self.services.append(serv)
         return serv
 
     def list_services(self):
-        url = self.auth.api+'/organizations/'+self.organizationId+'/services.json'
+        url = self.auth.api + '/organizations/' + self.organizationId + '/services.json'
         resp = requests.get(url, cookies=self.auth.cookies, verify=False)
         log.debug(resp.request.body)
         log.debug(resp.text)
@@ -377,17 +421,18 @@ class Organization(object):
         # TODO: modify service if differs
         return self.get_or_create_service(id=id, name=name, type=type, parameters=parameters, zone=zone)
 
-### ENVIRONMENT
+    ### ENVIRONMENT
     def create_environment(self, name, default=False, zone=None):
         """ Creates environment and returns Environment object.
         """
         from qubell.api.private.environment import Environment
+
         env = Environment(auth=self.auth, organization=self).create(name=name, zone=zone, default=default)
         self.environments.add(env)
         return env
 
     def list_environments_json(self):
-        url = self.auth.api+'/organizations/'+self.organizationId+'/environments.json'
+        url = self.auth.api + '/organizations/' + self.organizationId + '/environments.json'
         resp = requests.get(url, cookies=self.auth.cookies, verify=False)
         log.debug(resp.text)
         if resp.status_code == 200:
@@ -476,10 +521,10 @@ class Organization(object):
 
     def get_default_environment(self):
         def_envs = [x for x in self.environments if x.isDefault == True]
-        if len(def_envs)>1:
+        if len(def_envs) > 1:
             log.warning('Found more than one default environment. Picking last.')
             return def_envs[-1]
-        elif len(def_envs)==1:
+        elif len(def_envs) == 1:
             return def_envs[0]
         raise exceptions.NotFoundError('Unable to get default environment')
 
@@ -487,12 +532,12 @@ class Organization(object):
         return environment.set_as_default()
 
 
-### PROVIDER
+    ### PROVIDER
     def create_provider(self, name, parameters):
         log.info("Creating provider: %s" % name)
         parameters['name'] = name
 
-        url = self.auth.api+'/organizations/'+self.organizationId+'/providers.json'
+        url = self.auth.api + '/organizations/' + self.organizationId + '/providers.json'
         headers = {'Content-Type': 'application/json'}
         resp = requests.post(url, cookies=self.auth.cookies, data=json.dumps(parameters), verify=False, headers=headers)
         log.debug(resp.text)
@@ -502,7 +547,7 @@ class Organization(object):
         raise exceptions.ApiError('Unable to create provider %s, got error: %s' % (name, resp.text))
 
     def list_providers(self):
-        url = self.auth.api+'/organizations/'+self.organizationId+'/providers.json'
+        url = self.auth.api + '/organizations/' + self.organizationId + '/providers.json'
         resp = requests.get(url, cookies=self.auth.cookies, verify=False)
         log.debug(resp.text)
         if resp.status_code == 200:
@@ -511,6 +556,7 @@ class Organization(object):
 
     def get_provider(self, id):
         from qubell.api.private.provider import Provider
+
         prov = Provider(self.auth, organization=self, id=id)
         self.providers.append(prov)
         return prov
@@ -520,7 +566,7 @@ class Organization(object):
         self.providers.remove(prov)
         return prov.delete()
 
-    def get_or_create_provider(self,id=None, name=None, parameters=None):
+    def get_or_create_provider(self, id=None, name=None, parameters=None):
 
         """ Smart object. Will create provider or pick one, if exists"""
         if name:
@@ -543,10 +589,10 @@ class Organization(object):
         """
         return self.get_or_create_provider(id=id, name=name, parameters=parameters)
 
-### ZONES
+    ### ZONES
 
     def list_zones_json(self):
-        url = self.auth.api+'/organizations/'+self.organizationId+'/zones.json'
+        url = self.auth.api + '/organizations/' + self.organizationId + '/zones.json'
         resp = requests.get(url, cookies=self.auth.cookies, verify=False)
         log.debug(resp.text)
         if resp.status_code == 200:
@@ -570,9 +616,9 @@ class Organization(object):
         raise exceptions.NotFoundError('Unable to get zone by id: %s' % id)
 
     def get_default_zone(self):
-    # Zones(backends) are factor we can't controll. So, get them.
+        # Zones(backends) are factor we can't controll. So, get them.
         backends = self.json()['backends']
-        zones = [bk for bk in backends if bk['isDefault']==True]
+        zones = [bk for bk in backends if bk['isDefault'] == True]
         if len(zones):
             zoneId = zones[0]['id']
             return self.get_zone(id=zoneId)

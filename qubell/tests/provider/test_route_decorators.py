@@ -76,7 +76,7 @@ class RouterDecoratorTests(unittest2.TestCase):
         """Route parameters should be defined explicitly"""
         with self.assertRaises(AttributeError) as context:
             self.router.get_named("12345")
-        assert context.exception.message == "Define 'some_name' as named argument for route."
+        assert str(context.exception) == "Define 'some_name' as named argument for route."
         assert not request_mock.called
 
     def test_play_auth(self, request_mock):
@@ -88,7 +88,7 @@ class RouterDecoratorTests(unittest2.TestCase):
     def test_play_when_cookies_forced(self, request_mock):
         with self.assertRaises(AttributeError) as context:
             self.router.post_something_privetly(cookies="anything")
-        assert context.exception.message == "don't set cookies explicitly"
+        assert str(context.exception) == "don't set cookies explicitly"
         assert not request_mock.called
 
     def test_basic_auth(self, request_mock):
@@ -101,7 +101,7 @@ class RouterDecoratorTests(unittest2.TestCase):
     def test_basic_when_auth_forced(self, request_mock):
         with self.assertRaises(AttributeError) as context:
             self.router.post_something_publicly(auth="anything")
-        assert context.exception.message == "don't set auth token explicitly"
+        assert str(context.exception) == "don't set auth token explicitly"
         assert not request_mock.called
 
     def test_simple_json(self, request_mock):
@@ -117,35 +117,35 @@ class RouterDecoratorTests(unittest2.TestCase):
         with self.assertRaises(ApiUnauthorizedError) as context:
             self.router.post_something_publicly()
         assert request_mock.called
-        assert context.exception.message == "Route http://nowhere.com/auth returned code=401 and error: check credentials"
+        assert str(context.exception) == "Route /auth returned code=401 and error: check credentials"
 
     def test_error_403(self, request_mock):
         request_mock.return_value = gen_response(403, "ask admin for permissions")
         with self.assertRaises(ApiAuthenticationError) as context:
             self.router.post_something_publicly()
         assert request_mock.called
-        assert context.exception.message == "Route http://nowhere.com/auth returned code=403 and error: ask admin for permissions"
+        assert str(context.exception) == "Route /auth returned code=403 and error: ask admin for permissions"
 
     def test_error_404(self, request_mock):
         request_mock.return_value = gen_response(404, "not found or don't have permissions")
         with self.assertRaises(ApiNotFoundError) as context:
             self.router.post_something_publicly()
         assert request_mock.called
-        assert context.exception.message == "Route http://nowhere.com/auth returned code=404 and error: not found or don't have permissions"
+        assert str(context.exception) == "Route /auth returned code=404 and error: not found or don't have permissions"
 
     def test_error_408(self, request_mock):
         request_mock.return_value = gen_response(408, "timeout")
         with self.assertRaises(ApiError) as context:
             self.router.post_something_publicly()
         assert request_mock.called
-        assert context.exception.message == "Route http://nowhere.com/auth returned code=408 and error: timeout"
+        assert str(context.exception) == "Route /auth returned code=408 and error: timeout"
 
     def test_error_500(self, request_mock):
         request_mock.return_value = gen_response(500, "server down")
         with self.assertRaises(ApiError) as context:
             self.router.post_something_publicly()
         assert request_mock.called
-        assert context.exception.message == "Route http://nowhere.com/auth returned code=500 and error: server down"
+        assert str(context.exception) == "Route /auth returned code=500 and error: server down"
 
     def test_errors_can_be_ignored(self, request_mock):
         """Should not propagate errors if verify_codes turned off"""

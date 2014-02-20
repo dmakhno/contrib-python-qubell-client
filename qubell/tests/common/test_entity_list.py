@@ -43,19 +43,26 @@ class EntityListTests(unittest2.TestCase):
     def test_get_dublicate_item_by_name(self):
         with self.assertRaises(exceptions.ExistsError) as context:
             assert self.entity_list["name3dup"]
-        assert context.exception.message == "There are more than one 'name3dup' in DummyEntityList"
+        assert str(context.exception) == "There are more than one 'name3dup' in DummyEntityList"
 
     def test_not_existing_item(self):
         with self.assertRaises(exceptions.NotFoundError) as context:
             assert self.entity_list["hren"]
-        assert context.exception.message == "None of 'hren' in DummyEntityList"
+        assert str(context.exception) == "None of 'hren' in DummyEntityList"
 
     def test__len(self):
         assert len(self.raw_objects) == len(self.entity_list)
 
-    def test__in(self):
+    def test__in_by_item(self):
         dummy = EntityListTests.DummyEntity("1", "name1")
         assert dummy in self.entity_list
+
+    def test__in_by_id(self):
+        assert "1234567890abcd1234567890" in self.entity_list
+
+    def test__in_by_name(self):
+        assert "name2" in self.entity_list
+        assert "name3dup" in self.entity_list
 
     def test__iter(self):
         entity_ids = [e.id for e in self.entity_list]

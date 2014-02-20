@@ -12,6 +12,7 @@
 # implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from qubell import deprecated
 
 
 __author__ = "Vasyl Khomenko"
@@ -25,7 +26,7 @@ import requests
 import simplejson as json
 
 from qubell.api.private import exceptions
-from qubell.api.private.common import EntityList
+from qubell.api.private.common import EntityList, Entity
 
 
 class Applications(EntityList):
@@ -40,29 +41,32 @@ class Applications(EntityList):
             self.object_list.append(Application(self.auth, self.organization, id=app['id']))
 
 
-class Application(object):
+class Application(Entity):
     """
     Base class for applications. It should create application and services+environment requested
     """
 
-    def __update(self):
-        info = self.json()
-        self.name = info['name']
-        self.id = self.applicationId
-        self.defaultEnvironment = self.organization.get_default_environment()
-
-
-    def __init__(self, auth, organization, **kwargs):
+    def __init__(self, organization, id, name=None, router=None, auto_fetch=True):
         if hasattr(self, 'applicationId'):
             log.warning("Application reinitialized. Dangerous!")
-        self.revisions = []
-        self.auth = auth
+
+        self.router = router
         self.organization = organization
-        self.organizationId = self.organization.organizationId
-        self.defaultEnvironment = self.organization.get_default_environment()
-        if 'id' in kwargs:
-            self.applicationId = kwargs.get('id')
-            self.__update()
+        self.organizationId = organization.id
+        self.applicationId = self.id = id
+        self.name = name
+
+        self.revisions = []
+        Entity.__init__(self, auto_fetch)
+
+        self.auth = router #todo: remove, router mimics auth
+
+    def fetch(self):
+        resp = self.router.get_application(org_id=self.organizationId, app_id=self.id)
+        self.raw_json = resp.json
+
+        self.name = self.raw_json['name']
+        Entity.get(self)
 
     def __parse(self, values):
         ret = {}
@@ -72,18 +76,25 @@ class Application(object):
 
         #TODO: Think how to restore revisions
 
-    def create(self, name, manifest):
+    @staticmethod
+    def create(name, manifest, organization, router):
+        assert organization and name and manifest
         log.info("Creating application: %s" % name)
-        url = self.auth.api+'/organizations/'+self.organizationId+'/applications.json'
+        resp = router.post_application(org_id=organization.id,
+                                       files={'path': manifest.content},
+                                       data={'manifestSource': 'upload', 'name': name})
+        app_id = resp.json()['id']
+        app = Application(organization, app_id, name, router=router)
+        app.manifest = manifest  # is it really used than?
+        return app
 
-        resp = requests.post(url, files={'path': manifest.content}, data={'manifestSource': 'upload', 'name': name}, verify=False, cookies=self.auth.cookies)
-        log.debug(resp.text)
-        if resp.status_code == 200:
-            self.applicationId = resp.json()['id']
-            self.manifest = manifest
-            self.__update()
-            return self
-        raise exceptions.ApiError('Unable to create application %s, got error: %s' % (name, resp.text))
+    @deprecated
+    def create_legacy(self, name, manifest):
+        return Application.create(name, manifest, self.organization, self.route)
+
+    @property
+    def defaultEnvironment(self): return self.organization.get_default_environment()
+
 
     def delete(self):
         log.info("Removing application: %s" % self.name)

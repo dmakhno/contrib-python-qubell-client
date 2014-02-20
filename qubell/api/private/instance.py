@@ -12,6 +12,8 @@
 # implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from qubell.api import ROUTER as router
+
 
 __author__ = "Vasyl Khomenko"
 __copyright__ = "Copyright 2013, Qubell.com"
@@ -21,11 +23,11 @@ __email__ = "vkhomenko@qubell.com"
 import logging as log
 import requests
 import simplejson as json
-from qubell.api.tools import lazy
+from qubell.api.tools import lazy, cachedproperty
 
 from qubell.api.tools import waitForStatus as waitForStatus
 from qubell.api.private import exceptions
-from qubell.api.private.common import EntityList
+from qubell.api.private.common import EntityList, Entity, fetched
 
 DEAD_STATUS = ['Destroyed', 'Destroying']
 
@@ -47,8 +49,15 @@ class Instances(EntityList):
             for ins in instances_alive:
                 self.object_list.append(Instance(self.auth, app, id=ins['id']))
 
+org = Organization(id="123")
+instance = Instance(id="234", organization = org)
+#
+request.get()
+#
+instance.application.id
 
-class Instance(object):
+
+class Instance(Entity):
     """
     Base class for application instance. Manifest required.
     """
@@ -59,32 +68,16 @@ class Instance(object):
             ret[val['id']] = val['value']
         return ret
 
-    #@lazy
-    def __update(self):
-        info = self.json()
-        self.name = info['name']
-        #self.id = self.instanceId
 
-        self.environmentId = info['environmentId']
-        self.environment = self.organization.get_environment(self.environmentId)
+    def __init__(self, id, organization, auto_fetch=True):
+        self.instanceId = self.id = id
+        self.organization = organization
+        self.organizationId = organization.id
 
-    def __init__(self, auth, application, **kwargs):
-        if hasattr(self, 'instanceId'):
-            log.warning("Instance reinitialized. Dangerous!")
-        self.auth = auth
-        self.application = application
-        self.applicationId = application.applicationId
-        self.organization = application.organization
-        self.organizationId = application.organizationId
-        self.defaultEnvironment = application.defaultEnvironment
-        self.__dict__.update(kwargs)
-        if 'id' in kwargs:
-            self.instanceId = kwargs.get('id')
-            self.__update()
-        #elif 'name' in kwargs:
-        #    self.by_name(kwargs.get('name'))
+        Entity.__init__(self, auto_fetch)
 
     def __getattr__(self, key):
+        self.fetch()
         if key in ['instanceId',]:
             raise exceptions.NotFoundError('Unable to get instance property: %s' % key)
         if key == 'ready':
@@ -92,50 +85,63 @@ class Instance(object):
             return self.ready()
         # return same way old_public api does
         if key in ['returnValues', ]:
-            return self.__parse(self.json()[key])
+            return self.__parse(self.raw_json[key])
         else:
             log.debug('Getting instance attribute: %s' % key)
-            return self.json()[key]
+            return self.raw_json[key]
 
-    def json(self):
-        url = self.auth.api+'/organizations/'+self.organizationId+'/instances/'+self.instanceId+'.json'
-        resp = requests.get(url, cookies=self.auth.cookies, data="{}", verify=False)
-        log.debug(resp.request.headers)
-        log.debug(resp.text)
-        if resp.status_code == 200:
-            return resp.json()
-        raise exceptions.NotFoundError('Unable to get instance properties, got error: %s' % resp.text)
+    def fetch(self):
+        resp = router.get_instance(org_id=self.organizationId,instance_id=self.id)
+        self.raw_json = resp.json()
 
-    def create(self, revision=None, environment=None, name=None, parameters={}):
-        # Check we already has instance assosiated with us
-        if hasattr(self, 'instanceId'):
-            return self
-        url = self.auth.api+'/organizations/'+self.organizationId+'/applications/'+self.applicationId+'/launch.json'
-        headers = {'Content-Type': 'application/json'}
+        info = self.json()
+        self.name = info['name']
+        Entity.fetch(self)
+
+    @cachedproperty
+    def application(self):
+        from qubell.api.private.application import Application
+        return self._application_cache or Application(id=self.applicationId, auto_fetch=False)
+
+    @cachedproperty
+    def environemnt(self):
+        from qubell.api.private.environment import Environment
+        return self._environemnt_cache or Environment(id=self.environemntId)
+
+    @fetched
+    @property
+    def environmentId(self):
+        return self.raw_json["environmentId"]
+
+    @fetched
+    @property
+    def applicationId(self):
+        return self.raw_json["applicationId"]
+
+    @fetched
+    @property
+    def status(self):
+        return getattr(self, "status")
+
+    @staticmethod
+    def create(name, revision, environment, application, parameters):
         if environment:
             parameters['environmentId'] = environment.environmentId
         elif not 'environmentId' in parameters.keys():
-            parameters['environmentId'] = self.defaultEnvironment.environmentId
+            parameters['environmentId'] = application.organzation.defaultEnvironment.environmentId
         if name:
             parameters['instanceName'] = name
 
         data = json.dumps(parameters)
-        resp = requests.post(url, cookies=self.auth.cookies, data=data, verify=False, headers=headers)
+        resp = router.post_instance(org_id=application.organizationId, app_id=application.applicationId, data=data)
+        instance = Instance(id=resp.json()['id'])
+        instance._application_cache = application
+        instance._environment_cache = environment
+        return
 
-        log.debug('--- INSTANCE LAUNCH REQUEST ---')
-        log.debug('REQUEST HEADERS: %s' % resp.request.headers)
-        log.debug('REQUEST: %s' % resp.request.body)
-        log.debug('RESPONSE: %s' % resp.text)
-
-        if resp.status_code == 200:
-            self.instanceId = resp.json()['id']
-            self.__update()
-            return self
-        raise exceptions.ApiError('Unable to launch application id: %s, got error: %s' % (self.applicationId, resp.text))
-
+    #todo: remove
     def by_name(self, name):
         instance = self.organization.get_instance(name=name)
-        #instance = [x for x in self.organization.instances if x.name == name]
         return instance
 
     def by_id(self, id):

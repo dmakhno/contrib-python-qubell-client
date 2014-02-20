@@ -148,3 +148,26 @@ def lazy(func):
 def is_bson_id(bson_id):
     id_pattern = "[A-Fa-f0-9]{24}"
     return re.match(id_pattern, bson_id)
+
+
+class ZeroCacheMixin(object):
+    """
+    This mixing allow to get cache attributes with None value before actual initialization
+    """
+    def __getattr__(self, attr_name):
+        is_cache_attr = lambda an: an.startswith('_') and an.endswith('_cache')
+        if is_cache_attr(attr_name) and attr_name not in self.__dict__:
+            return None
+        return getattr(self.person, attr_name)
+
+
+def cachedproperty(fn):
+    """
+    decorator for properties, to have _<prop_name>_cache stored values
+    """
+    attr_name = '_' + fn.__name__ + '_cache'
+    @property
+    def _cached_prop(self):
+        setattr(self, attr_name, fn(self))
+        return getattr(self, attr_name)
+    return _cached_prop

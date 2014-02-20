@@ -12,16 +12,18 @@
 # implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import logging as log
 import warnings
 
-import simplejson as json
-
+from qubell.api.private.organization import Organization, OrganizationList
 from qubell.api.provider.router import Router
 from qubell import deprecated
 
-#todo: understood, that some people may use this object for authentication, need to move this to proper place
+#todo: some people may use this object for authentication, need to move this to proper place
 from qubell.api.private.common import Auth
+
+#todo: create mimic for Context...
+from qubell.api.tools import cachedproperty
+
 Auth = Auth # Auth usage, to be sure won't be removed from imports
 
 __author__ = "Vasyl Khomenko"
@@ -31,20 +33,22 @@ __email__ = "vkhomenko@qubell.com"
 
 
 class QubellPlatform(object):
-    def __init__(self, auth=None, context=None):
-        if context:
-            warnings.warn("replace context with auth name, it is deprecated and will be removed", DeprecationWarning,
-                          stacklevel=2)
+    def __init__(self, router=None):
+        self.router = router
 
-        self.organizations = []
-        self.auth = auth or context
-        self.user = self.auth.user
-        self.password = self.auth.password
-        self.tenant = self.auth.tenant
+    @staticmethod
+    def connect(tenant, user, password):
 
-        self.router = Router(self.tenant)
+        router = Router(tenant)
+        router.connect(user, password)
 
+        #todo: remove auth mimics when routes are used everywhere
+        router.tenant = tenant
+        router.user = user
+        router.password = password
+        return QubellPlatform(router=router, auth=router)
 
+    @deprecated
     def authenticate(self):
         self.router.connect(self.auth.user, self.auth.password)
         #todo: remove following, left for compatibility
@@ -52,55 +56,35 @@ class QubellPlatform(object):
         return True
 
     def create_organization(self, name):
-        log.info("Creating organization: %s" % name)
-        payload = json.dumps({'editable': 'true',
-                              'name': name})
-        resp = self.router.post_organization(data=payload)
-        return self.get_organization(resp.json()['id'])
-
+        return Organization.create(name, self.router)
 
     def get_organization(self, id):
-        log.info("Picking organization: %s" % id)
-        from qubell.api.private.organization import Organization
-
-        org = Organization(self.auth, id=id)
-        self.organizations.append(org)
+        org = Organization(id=id, router=self.router)
+        self._organizations_cache.append(org)
         return org
 
     def get_or_create_organization(self, id=None, name=None):
-        if name:
-            orgz = [org for org in self.list_organizations() if org['name'] == name]
-            # Org found by name
-            if len(orgz):
-                return self.get_organization(orgz[0]['id'])
-            else:
-                return self.create_organization(name)
-        else:
-            name = 'generated-org-name'
-            if id:
-                return self.get_organization(id)
-            else:
-                return self.create_organization(name)
-
-    def organization(self, id=None, name=None):
         """ Smart object. Will create organization, modify or pick one"""
-        # TODO: Modify if parameters differs
-        return self.get_or_create_organization(id, name)
+        assert id or name
+        name = name or 'generated-org-name'
+        if id: return self.get_organization(id)
+        if name:
+            #if cached, no need to get all
+            if name in self._organizations_cache or name in self.organizations:
+                return self._organizations_cache[name]
+            else:
+                return self.create_organization(name)
 
-    def organizations_json(self):
-        resp = self.router.get_organizations()
-        return resp.json()
+    #alias
+    organization = get_or_create_organization
 
-    list_organizations = organizations_json
+    def organizations_json(self): return self.router.get_organizations().json()
 
+    @cachedproperty
     def organizations(self):
-        return OrganizationList(self.organizations_json())
+        return OrganizationList(self.organizations_json(), self.router)
 
     def restore(self, config):
         for org in config.pop('organizations', []):
             restored_org = self.get_or_create_organization(id=org.get('id'), name=org.get('name'))
             restored_org.restore(org)
-
-    @deprecated
-    def get_context(self):
-        return self.auth
